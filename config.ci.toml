@@ -1,0 +1,45 @@
+base = "config.toml"
+
+[hadoop]
+split_mb = 2
+reducers = 2
+shards = 2
+
+[source]
+classes = 8
+max_mb = 1
+
+[dataset]
+train_per_class = 1400
+val_per_class = 150
+test_per_class = 300
+
+[train]
+epochs = 2
+batch_size = 64
+buffer = 512
+log_every = 50
+checkpoint_every = 100
+threads = 2
+
+[eval]
+bootstrap = 100
+robustness_samples = 1000
+min_country = 50
+gradcam = 8
+
+[export]
+latency_runs = 30
+calibration_samples = 256
+
+[score]
+fraction = 1.0
+threshold = 0.6
+top_k = 5
+batch = 64
+
+[scratch]
+classes = 4
+train_per_class = 400
+test_per_class = 100
+epochs = 2

@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doodle classifier</title>
+<style>
+  :root { --paper: #f5f2ea; --card: #fffdf8; --ink: #1d1b18; --soft: #6f6a60; --line: #ddd6c8; --accent: #c2452d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 28px 16px 40px; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.5px; }
+  .lead { margin: 6px 0 22px; color: var(--soft); }
+  .board { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 22px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  #pad { width: 100%; aspect-ratio: 1; display: block; background: #fff; border: 1px solid var(--line); border-radius: 10px; touch-action: none; cursor: crosshair; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--ink); }
+  .between { justify-content: space-between; }
+  .prompt { color: var(--soft); }
+  .prompt b { color: var(--ink); }
+  .prompt.hit b { color: var(--accent); }
+  h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--soft); font-weight: 600; }
+  .guess { display: grid; grid-template-columns: 150px 1fr 48px; gap: 10px; align-items: center; margin: 7px 0; }
+  .guess span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .guess:first-child span { font-weight: 600; }
+  .bar { height: 10px; background: #ece6d9; border-radius: 5px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--ink); border-radius: 5px; transition: width 0.15s; }
+  .guess:first-child .bar i { background: var(--accent); }
+  .pct { text-align: right; color: var(--soft); font-variant-numeric: tabular-nums; }
+  .empty { color: var(--soft); margin: 8px 0; }
+  .seen { display: flex; gap: 14px; align-items: flex-start; margin-top: 18px; }
+  .seen canvas { width: 128px; height: 128px; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .seen p { margin: 0; color: var(--soft); font-size: 14px; }
+  footer { margin-top: 22px; color: var(--soft); font-size: 14px; }
+  footer a { color: inherit; }
+  @media (max-width: 720px) { .board { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Doodle classifier</h1>
+  <p class="lead">Draw something. A small CNN trained on Quick, Draw! doodles guesses what it is after every stroke.</p>
+  <div class="board">
+    <div class="card">
+      <canvas id="pad" width="840" height="840"></canvas>
+      <div class="row">
+        <button id="undo">Undo</button>
+        <button id="clear">Clear</button>
+      </div>
+      <div class="row between">
+        <span class="prompt" id="prompt">Try drawing <b id="word"></b></span>
+        <button id="next">New word</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Guesses</h2>
+      <div id="guesses"><p class="empty">Nothing drawn yet.</p></div>
+      <div class="seen">
+        <canvas id="seen" width="32" height="32"></canvas>
+        <p>What the network sees: your drawing shrunk to its small input size. The red wash is the class activation map for the top guess, so it marks the area that pushed the network toward that answer.</p>
+      </div>
+    </div>
+  </div>
+  <footer><span id="count">Loading the model. </span>The model runs in your browser, so nothing you draw is uploaded. The strokes go through a JavaScript copy of the rasterizer that the Hadoop job used to build the training set.</footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.js"></script>
+<script type="module">
+import { normalize, read, render, tensor } from "./doodle.js";
+
+ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+ort.env.wasm.numThreads = 1;
+
+const pad = document.getElementById("pad");
+const ctx = pad.getContext("2d");
+const seen = document.getElementById("seen");
+const seenCtx = seen.getContext("2d");
+const guesses = document.getElementById("guesses");
+const prompt = document.getElementById("prompt");
+const word = document.getElementById("word");
+let strokes = [];
+let current = null;
+let names = [];
+let ticket = 0;
+let meta = null;
+let session = null;
+
+function position(event) {
+  const box = pad.getBoundingClientRect();
+  return [(event.clientX - box.left) * pad.width / box.width, (event.clientY - box.top) * pad.height / box.height];
+}
+
+function redraw() {
+  ctx.clearRect(0, 0, pad.width, pad.height);
+  ctx.lineWidth = 12;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#1d1b18";
+  for (const stroke of current ? strokes.concat([current]) : strokes) {
+    ctx.beginPath();
+    ctx.moveTo(stroke[0][0], stroke[1][0]);
+    for (let i = 1; i < stroke[0].length; i++) ctx.lineTo(stroke[0][i], stroke[1][i]);
+    if (stroke[0].length === 1) ctx.lineTo(stroke[0][0] + 0.1, stroke[1][0]);
+    ctx.stroke();
+  }
+}
+
+function showEmpty() {
+  guesses.innerHTML = '<p class="empty">Nothing drawn yet.</p>';
+  seenCtx.clearRect(0, 0, seen.width, seen.height);
+  prompt.classList.remove("hit");
+}
+
+function showSeen(image, heat) {
+  const size = image.length;
+  seen.width = seen.height = size;
+  const pixels = seenCtx.createImageData(size, size);
+  const grid = heat.length;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const gx = Math.min(grid - 1, Math.max(0, (x + 0.5) * grid / size - 0.5));
+      const gy = Math.min(grid - 1, Math.max(0, (y + 0.5) * grid / size - 0.5));
+      const x0 = Math.floor(gx), y0 = Math.floor(gy);
+      const x1 = Math.min(grid - 1, x0 + 1), y1 = Math.min(grid - 1, y0 + 1);
+      const fx = gx - x0, fy = gy - y0;
+      const warm = (heat[y0][x0] * (1 - fx) + heat[y0][x1] * fx) * (1 - fy) + (heat[y1][x0] * (1 - fx) + heat[y1][x1] * fx) * fy;
+      const ink = image[y][x] / 255;
+      const base = 255 * (1 - ink);
+      const mix = 0.55 * warm * (1 - ink);
+      const at = 4 * (y * size + x);
+      pixels.data[at] = base + (194 - base) * mix;
+      pixels.data[at + 1] = base + (69 - base) * mix;
+      pixels.data[at + 2] = base + (45 - base) * mix;
+      pixels.data[at + 3] = 255;
+    }
+  }
+  seenCtx.putImageData(pixels, 0, 0);
+}
+
+async function guess() {
+  const mine = ++ticket;
+  if (!strokes.length) { showEmpty(); return; }
+  const clean = session ? normalize(strokes) : null;
+  if (!clean) return;
+  const pixels = render(clean, meta.size, meta.width);
+  const input = new ort.Tensor("float32", tensor(pixels, meta), [1, meta.channels, meta.size, meta.size]);
+  const output = await session.run({ image: input });
+  if (mine !== ticket) return;
+  const result = read(output, meta, pixels);
+  guesses.innerHTML = "";
+  for (const item of result.guesses) {
+    const row = document.createElement("div");
+    row.className = "guess";
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const fill = document.createElement("i");
+    fill.style.width = (100 * item.p).toFixed(1) + "%";
+    bar.appendChild(fill);
+    const pct = document.createElement("div");
+    pct.className = "pct";
+    pct.textContent = (100 * item.p).toFixed(0) + "%";
+    row.append(label, bar, pct);
+    guesses.appendChild(row);
+  }
+  showSeen(result.image, result.heat);
+  prompt.classList.toggle("hit", result.guesses[0].label === word.textContent);
+}
+
+function newWord() {
+  if (names.length) word.textContent = names[Math.floor(Math.random() * names.length)];
+  prompt.classList.remove("hit");
+}
+
+pad.addEventListener("pointerdown", event => {
+  pad.setPointerCapture(event.pointerId);
+  const [x, y] = position(event);
+  current = [[x], [y]];
+  redraw();
+});
+
+pad.addEventListener("pointermove", event => {
+  if (!current) return;
+  const [x, y] = position(event);
+  const n = current[0].length - 1;
+  if (Math.hypot(x - current[0][n], y - current[1][n]) < 3) return;
+  current[0].push(x);
+  current[1].push(y);
+  redraw();
+});
+
+function finish() {
+  if (!current) return;
+  strokes.push(current);
+  current = null;
+  redraw();
+  guess();
+}
+
+pad.addEventListener("pointerup", finish);
+pad.addEventListener("pointercancel", finish);
+
+document.getElementById("undo").addEventListener("click", () => { strokes.pop(); redraw(); guess(); });
+document.getElementById("clear").addEventListener("click", () => { strokes = []; ticket++; redraw(); showEmpty(); });
+document.getElementById("next").addEventListener("click", () => { strokes = []; ticket++; redraw(); showEmpty(); newWord(); });
+
+meta = await (await fetch("model/model.json")).json();
+session = await ort.InferenceSession.create("model/model.onnx");
+names = meta.classes;
+document.getElementById("count").textContent = names.length + " classes. ";
+newWord();
+guess();
+</script>
+</body>
+</html>

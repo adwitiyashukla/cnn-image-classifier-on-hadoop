@@ -1,0 +1,111 @@
+[hdfs]
+url = "http://localhost:9870"
+user = ""
+root = "/imgcnn"
+
+[hadoop]
+home = ""
+python = "python3"
+split_mb = 256
+reducers = 8
+shards = 32
+score_map_mb = 1024
+
+[source]
+url = "https://storage.googleapis.com/quickdraw_dataset/full/simplified"
+manifest = "https://storage.googleapis.com/storage/v1/b/quickdraw_dataset/o?prefix=full/simplified/&fields=items(name,size,md5Hash)&maxResults=1000"
+classes = 0
+max_mb = 26
+workers = 4
+retries = 3
+
+[dataset]
+seed = 2026
+image_size = 32
+line_width = 2.0
+train_per_class = 4000
+val_per_class = 250
+test_per_class = 500
+
+[train]
+model = "resnet"
+channels = 3
+epochs = 1
+batch_size = 128
+optimizer = "adamw"
+lr = 0.002
+weight_decay = 0.05
+momentum = 0.9
+warmup_epochs = 0.1
+label_smoothing = 0.1
+mixup = 0.0
+cutmix = 0.0
+augment = true
+rotate = 10.0
+scale = 0.1
+shift = 0.06
+flip = true
+ema = 0.999
+clip_grad = 2.0
+fraction = 1.0
+recognized_only = false
+val_samples = 0
+threads = 0
+workers = 1
+buffer = 8192
+log_every = 100
+checkpoint_every = 500
+seed = 1
+device = "auto"
+
+[resnet]
+stem = 32
+widths = [32, 64, 128, 256]
+depths = [1, 1, 2, 1]
+
+[mobilenet]
+stem = 24
+expand = [1, 4, 4, 4, 4]
+channels = [16, 32, 48, 96, 160]
+repeats = [1, 2, 3, 3, 2]
+strides = [1, 2, 2, 1, 2]
+head = 512
+
+[convnext]
+widths = [48, 96, 192]
+depths = [2, 2, 4]
+drop_path = 0.05
+
+[eval]
+batch_size = 512
+bootstrap = 1000
+robustness_samples = 5000
+min_country = 300
+gradcam = 16
+
+[export]
+latency_runs = 200
+calibration_samples = 2048
+
+[bench]
+warmup_seconds = 30.0
+seconds = 8.0
+rounds = 3
+
+[score]
+fraction = 0.02
+threshold = 0.9
+top_k = 25
+batch = 256
+threads = 1
+
+[scratch]
+classes = 10
+train_per_class = 1500
+test_per_class = 300
+epochs = 4
+lr = 0.05
+batch_size = 64
+
+[runs]
+dir = "runs"

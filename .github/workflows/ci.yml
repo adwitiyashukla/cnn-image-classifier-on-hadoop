@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: ruff check .
+      - run: pytest -q
+
+  pipeline:
+    runs-on: ubuntu-latest
+    env:
+      HADOOP_VERSION: "3.5.0"
+      HADOOP_SHA512: 04ab94496cc00c8b7a28d03f6308eff8d2a4e7f37a9da5e8e086e4d6fc990e7a94d661908f6a6136039536efb362614b8aecdef185b5fb8ed588f0b152c7aa16
+      CONFIG: config.ci.toml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/hadoop.tar.gz
+          key: hadoop-${{ env.HADOOP_VERSION }}
+      - name: Install Hadoop
+        run: |
+          file="hadoop/common/hadoop-$HADOOP_VERSION/hadoop-$HADOOP_VERSION.tar.gz"
+          test -f ~/hadoop.tar.gz || curl -fsSL -o ~/hadoop.tar.gz "https://dlcdn.apache.org/$file" || curl -fsSL -o ~/hadoop.tar.gz "https://archive.apache.org/dist/$file"
+          echo "$HADOOP_SHA512  $HOME/hadoop.tar.gz" | sha512sum -c -
+          tar -xzf ~/hadoop.tar.gz -C ~
+          echo "HADOOP_HOME=$HOME/hadoop-$HADOOP_VERSION" >> "$GITHUB_ENV"
+      - name: Start HDFS and YARN
+        run: |
+          bash hadoop/setup.sh install
+          bash hadoop/setup.sh start
+      - name: Ingest and run the MapReduce jobs
+        run: |
+          python -m imgcnn ingest --config $CONFIG
+          python -m imgcnn profile --config $CONFIG
+          python -m imgcnn audit --config $CONFIG
+          python -m imgcnn build --config $CONFIG
+      - name: Train, evaluate and export
+        run: |
+          python -m imgcnn train --config $CONFIG
+          python -m imgcnn evaluate --config $CONFIG
+          python -m imgcnn export --config $CONFIG
+      - name: Score unused drawings on YARN
+        run: python -m imgcnn score --config $CONFIG
+      - name: Train with two processes
+        run: torchrun --nproc_per_node=2 -m imgcnn train --config $CONFIG --name ddp --set train.model=convnext --set train.epochs=1
+      - name: NumPy network and report
+        run: |
+          python -m imgcnn scratch --config $CONFIG
+          python -m imgcnn report --config $CONFIG
+      - name: Show job logs on failure
+        if: failure()
+        run: tail -n 60 runs/hadoop/*.log
