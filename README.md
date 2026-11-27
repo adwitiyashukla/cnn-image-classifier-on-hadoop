@@ -38,6 +38,19 @@ The pairs it swaps most often are words that mean almost the same thing or look 
 
 The game also saved whether Google's model recognized each drawing while it was being drawn. My model gets 0.7505 on the 157,859 recognized test drawings and 0.1800 on the 14,015 that were not recognized. The drawings that Google's model could not recognize are hard for mine too.
 
+### Does the stroke order help?
+
+A drawing in this dataset is a list of strokes in the order they were drawn, and a plain black and white image throws that order away. So each drawing becomes three planes. The first is the ink, the second is the ink shaded by which stroke it belongs to, and the third is the ink shaded by how far along the drawing it is.
+
+To see if the two extra planes are worth it, I trained the same ResNet twice on one eighth of the training data (172,226 drawings, one pass), once with all three planes and once with the ink alone. These are the scores on the 86,793 validation drawings.
+
+| input | top-1 | top-3 | MAP@3 |
+|---|---|---|---|
+| ink only | 0.4605 | 0.6629 | 0.5505 |
+| ink, stroke order and progress | 0.4822 | 0.6877 | 0.5734 |
+
+The two extra planes are worth 0.022 of top-1, a bit more than 2 points. Both scores are far below the main model because these runs only saw one eighth of the data. I trained each one once with the same seed, so the size of the gap could move a little in another run.
+
 ### Confidence
 
 When the model says it is 80 percent sure, it should be right about 80 percent of the time. The expected calibration error measures how far off that is, and for the raw outputs it is 0.128. The model is less sure than it should be, and the label smoothing used in training is the likely reason. Dividing the logits by a temperature of 0.77, fitted on the validation set, brings the error down to 0.004.
@@ -86,6 +99,18 @@ The job also flags a drawing when the model is at least 90% sure of a different 
 ![drawings the model disagrees with](figures/suspects.png)
 
 ## Speed
+
+`python -m imgcnn bench` times one training step for each of the three CNN families in `imgcnn/models.py` on random data, with batches of 128 drawings and 6 threads. It warms the CPU up first and takes the median of 3 rounds, because a laptop CPU slows down a lot once it gets hot.
+
+| model | weights | multiply-adds per drawing | drawings per second in training |
+|---|---|---|---|
+| ResNet | 1.61M | 83M | 231 |
+| MobileNet | 1.34M | 30M | 187 |
+| ConvNeXt | 1.59M | 43M | 189 |
+
+The ResNet does the most multiply-adds and is still the fastest to train. MobileNet needs about a third as many and ConvNeXt about half, so counting multiply-adds does not tell you the speed on a CPU. The memory layout matters too. The same ResNet trains at 208 drawings per second with channels-first tensors and at 231 with channels-last, which is what the training code uses.
+
+More threads do not make it faster. With all 12 logical cores the ResNet drops to 118 drawings per second, so I train with 6.
 
 `python -m imgcnn export` writes the model as an ONNX file and as an int8 version, quantized with 2,048 validation drawings. All three are scored on the full test set.
 
@@ -181,7 +206,7 @@ python -m imgcnn build
 bash experiments.sh
 ```
 
-`experiments.sh` trains the main model, tests it, exports it, runs the scoring job and the NumPy check, trains the two small models for the stroke order comparison, prints a table of all runs and writes the figures to `runs/report`. `python -m imgcnn bench` times a training step of each of the three models on your CPU.
+`experiments.sh` trains the main model, tests it, exports it, runs the scoring job and the NumPy check, trains the two small models for the stroke order comparison, prints a table of all runs and writes the figures to `runs/report`. The first table in the speed section comes from `python -m imgcnn bench`.
 
 Every setting is in `config.toml` and is checked when it loads. Any of them can be changed for one run from the command line:
 
