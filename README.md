@@ -1,11 +1,5 @@
 # cnn-image-classifier-on-hadoop
 
-A doodle classifier where Hadoop does the data work and a CNN I wrote from scratch does the guessing.
-
-The drawings come from Google's Quick, Draw! game. I load 21 million of them into HDFS, MapReduce jobs on YARN clean them up and turn them into small images, and a ResNet trains on those images straight out of HDFS. After training, the model goes back to the cluster inside one more MapReduce job that scores drawings it has never seen.
-
-Everything ran on my laptop, an HP OmniBook 5 with an Intel Core 5 120U and 8 GB of RAM. Hadoop 3.5.0 runs as a single node inside WSL, and all the training is on the CPU.
-
 Live demo: [huggingface.co/spaces/adwitiyashukla/cnn-image-classifier-on-hadoop](https://huggingface.co/spaces/adwitiyashukla/cnn-image-classifier-on-hadoop). Draw something and the model guesses what it is after every stroke. It runs in your browser, so nothing you draw is uploaded.
 
 ## Results
